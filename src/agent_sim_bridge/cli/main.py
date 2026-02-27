@@ -516,5 +516,277 @@ def sim_safety_check(action_json: str, constraints_path: str | None) -> None:
         console.print("\n[bold green]All safety checks passed.[/bold green]")
 
 
+# ---------------------------------------------------------------------------
+# gap group
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="gap")
+def gap_group() -> None:
+    """Distribution-based sim-to-real gap estimation commands."""
+
+
+# ---------------------------------------------------------------------------
+# gap estimate
+# ---------------------------------------------------------------------------
+
+
+@gap_group.command(name="estimate")
+@click.option(
+    "--sim-data",
+    "sim_data_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="JSON file with simulation distribution data.",
+)
+@click.option(
+    "--real-data",
+    "real_data_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="JSON file with real-world distribution data.",
+)
+@click.option(
+    "--metrics",
+    "metrics_str",
+    default=None,
+    help=(
+        "Comma-separated list of metrics to compute: "
+        "kl,wasserstein,mmd,jsd.  Defaults to all four."
+    ),
+)
+@click.option(
+    "--format",
+    "output_format",
+    default="text",
+    type=click.Choice(["text", "json", "markdown"], case_sensitive=False),
+    show_default=True,
+    help="Output format for the gap report.",
+)
+def gap_estimate(
+    sim_data_path: str,
+    real_data_path: str,
+    metrics_str: str | None,
+    output_format: str,
+) -> None:
+    """Estimate the sim-to-real gap from distribution data files.
+
+    Both data files must be JSON with the schema::
+
+        {"dimensions": {"dim_name": {"sim": [values], "real": [values]}}}
+
+    Example::
+
+        agent-sim-bridge gap estimate \\
+            --sim-data sim.json --real-data real.json \\
+            --metrics kl,wasserstein --format markdown
+    """
+    import pathlib
+
+    from agent_sim_bridge.gap.estimator import GapDimension, GapEstimator, GapMetric
+    from agent_sim_bridge.gap.report import GapReporter
+
+    _METRIC_MAP: dict[str, GapMetric] = {
+        "kl": GapMetric.KL_DIVERGENCE,
+        "wasserstein": GapMetric.WASSERSTEIN,
+        "mmd": GapMetric.MMD,
+        "jsd": GapMetric.JENSEN_SHANNON,
+    }
+
+    # Load data files.
+    try:
+        sim_raw = json.loads(pathlib.Path(sim_data_path).read_text(encoding="utf-8"))
+        real_raw = json.loads(pathlib.Path(real_data_path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[red]Error reading data files:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    sim_dimensions: dict[str, object] = sim_raw.get("dimensions", {})
+    real_dimensions: dict[str, object] = real_raw.get("dimensions", {})
+
+    if not sim_dimensions or not real_dimensions:
+        console.print(
+            "[red]Both data files must contain a non-empty 'dimensions' key.[/red]"
+        )
+        raise SystemExit(1)
+
+    # Resolve metrics.
+    selected_metrics: list[GapMetric] | None = None
+    if metrics_str:
+        selected_metrics = []
+        for token in metrics_str.split(","):
+            token = token.strip().lower()
+            if token not in _METRIC_MAP:
+                console.print(
+                    f"[red]Unknown metric {token!r}. "
+                    f"Choose from: {', '.join(_METRIC_MAP)}.[/red]"
+                )
+                raise SystemExit(1)
+            selected_metrics.append(_METRIC_MAP[token])
+
+    # Build dimensions.
+    common_names = set(sim_dimensions) & set(real_dimensions)
+    if not common_names:
+        console.print(
+            "[red]No matching dimension names found between sim and real data files.[/red]"
+        )
+        raise SystemExit(1)
+
+    dimensions: list[GapDimension] = []
+    for dim_name in sorted(common_names):
+        sim_entry = sim_dimensions[dim_name]
+        real_entry = real_dimensions[dim_name]
+        try:
+            sim_values: list[float] = list(sim_entry["sim"])   # type: ignore[index]
+            real_values: list[float] = list(real_entry["real"])  # type: ignore[index]
+        except (KeyError, TypeError) as exc:
+            console.print(
+                f"[red]Dimension {dim_name!r} must have 'sim' and 'real' keys.[/red] {exc}"
+            )
+            raise SystemExit(1) from exc
+        dimensions.append(
+            GapDimension(
+                name=dim_name,
+                sim_distribution=sim_values,
+                real_distribution=real_values,
+            )
+        )
+
+    # Run estimation.
+    estimator = GapEstimator(metrics=selected_metrics)
+    try:
+        results = estimator.estimate_all(dimensions)
+    except Exception as exc:
+        console.print(f"[red]Gap estimation failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    reporter = GapReporter()
+    report = reporter.generate_report(results, dimensions)
+
+    if output_format == "json":
+        console.print(reporter.format_json(report))
+    elif output_format == "markdown":
+        console.print(reporter.format_markdown(report))
+    else:
+        console.print(reporter.format_text(report))
+
+
+# ---------------------------------------------------------------------------
+# gap compare
+# ---------------------------------------------------------------------------
+
+
+@gap_group.command(name="compare")
+@click.option(
+    "--sim-data",
+    "sim_data_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="JSON file with simulation distribution data.",
+)
+@click.option(
+    "--real-data",
+    "real_data_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="JSON file with real-world distribution data.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(),
+    help="Path to write the JSON gap report.",
+)
+def gap_compare(
+    sim_data_path: str,
+    real_data_path: str,
+    output_path: str,
+) -> None:
+    """Compare sim and real distributions and save a full JSON report.
+
+    Both data files must be JSON with the schema::
+
+        {"dimensions": {"dim_name": {"sim": [values], "real": [values]}}}
+
+    The report is written to OUTPUT as a JSON file.
+
+    Example::
+
+        agent-sim-bridge gap compare \\
+            --sim-data sim.json --real-data real.json \\
+            --output report.json
+    """
+    import pathlib
+
+    from agent_sim_bridge.gap.estimator import GapDimension, GapEstimator
+    from agent_sim_bridge.gap.report import GapReporter
+
+    # Load data files.
+    try:
+        sim_raw = json.loads(pathlib.Path(sim_data_path).read_text(encoding="utf-8"))
+        real_raw = json.loads(pathlib.Path(real_data_path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[red]Error reading data files:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    sim_dimensions: dict[str, object] = sim_raw.get("dimensions", {})
+    real_dimensions: dict[str, object] = real_raw.get("dimensions", {})
+
+    if not sim_dimensions or not real_dimensions:
+        console.print(
+            "[red]Both data files must contain a non-empty 'dimensions' key.[/red]"
+        )
+        raise SystemExit(1)
+
+    common_names = set(sim_dimensions) & set(real_dimensions)
+    if not common_names:
+        console.print(
+            "[red]No matching dimension names found between sim and real data files.[/red]"
+        )
+        raise SystemExit(1)
+
+    dimensions: list[GapDimension] = []
+    for dim_name in sorted(common_names):
+        sim_entry = sim_dimensions[dim_name]
+        real_entry = real_dimensions[dim_name]
+        try:
+            sim_values: list[float] = list(sim_entry["sim"])   # type: ignore[index]
+            real_values: list[float] = list(real_entry["real"])  # type: ignore[index]
+        except (KeyError, TypeError) as exc:
+            console.print(
+                f"[red]Dimension {dim_name!r} missing 'sim' or 'real' key.[/red] {exc}"
+            )
+            raise SystemExit(1) from exc
+        dimensions.append(
+            GapDimension(
+                name=dim_name,
+                sim_distribution=sim_values,
+                real_distribution=real_values,
+            )
+        )
+
+    estimator = GapEstimator()
+    try:
+        results = estimator.estimate_all(dimensions)
+    except Exception as exc:
+        console.print(f"[red]Gap estimation failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    reporter = GapReporter()
+    report = reporter.generate_report(results, dimensions)
+    json_output = reporter.format_json(report)
+
+    try:
+        pathlib.Path(output_path).write_text(json_output, encoding="utf-8")
+    except Exception as exc:
+        console.print(f"[red]Error writing report:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    console.print(f"[bold green]Gap report saved to:[/bold green] {output_path}")
+    console.print(f"Overall gap score: [bold]{report.overall_score:.4f}[/bold]")
+    console.print(f"Summary: {report.summary}")
+
+
 if __name__ == "__main__":
     cli()
