@@ -37,6 +37,16 @@ from __future__ import annotations
 
 __version__: str = "0.1.0"
 
+from agent_sim_bridge.convenience import (
+    Simulator,
+    quick_gap_analysis,
+    quick_recorder,
+    quick_safety_monitor,
+    quick_sandbox,
+    quick_skill_library,
+    quick_transfer_bridge,
+)
+
 # -- Environment ----------------------------------------------------------
 from agent_sim_bridge.environment import (
     Environment,
@@ -119,6 +129,14 @@ from agent_sim_bridge.plugins import PluginRegistry
 
 __all__: list[str] = [
     "__version__",
+    # convenience
+    "Simulator",
+    "quick_gap_analysis",
+    "quick_recorder",
+    "quick_safety_monitor",
+    "quick_sandbox",
+    "quick_skill_library",
+    "quick_transfer_bridge",
     # environment
     "Environment",
     "EnvironmentInfo",
