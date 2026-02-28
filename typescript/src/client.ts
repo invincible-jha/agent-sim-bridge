@@ -356,16 +356,3 @@ export function createAgentSimBridgeClient(
   };
 }
 
-/** Re-export types for convenience. */
-export type {
-  DomainRandomization,
-  GapEstimationRequest,
-  GapEstimationResult,
-  RandomizationRequest,
-  RandomizationResult,
-  SimResult,
-  SimulationConfig,
-  SimulationEnvironment,
-  TransferConfig,
-  TransferResult,
-};
