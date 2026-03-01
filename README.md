@@ -21,6 +21,14 @@ Part of the [AumOS](https://github.com/aumos-ai) open-source agent infrastructur
 - Sensor fusion module combines readings from multiple simulated or real sensors with configurable noise injection and covariance-weighted fusion
 - Backend adapters for Gazebo and PyBullet expose a uniform `SimulationEnvironment` interface so agents can be tested against either simulator without code changes
 
+## Current Limitations
+
+> **Transparency note**: We list known limitations to help you evaluate fit.
+
+- **Fidelity**: Text-based scenarios only. No physics engine integration.
+- **Validation**: No sim-to-real transfer validation harness yet.
+- **Environments**: Mock environments — no hardware-in-the-loop support.
+
 ## Quick Start
 
 Install from PyPI:

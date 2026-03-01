@@ -1,8 +1,12 @@
 /**
  * HTTP client for the agent-sim-bridge sim-to-real transfer API.
  *
- * Uses the Fetch API (available natively in Node 18+, browsers, and Deno).
- * No external dependencies required.
+ * Delegates all HTTP transport to `@aumos/sdk-core` which provides
+ * automatic retry with exponential back-off, timeout management via
+ * `AbortSignal.timeout`, interceptor support, and a typed error hierarchy.
+ *
+ * The public-facing `ApiResult<T>` envelope is preserved for full
+ * backward compatibility with existing callers.
  *
  * @example
  * ```ts
@@ -22,8 +26,16 @@
  * ```
  */
 
+import {
+  createHttpClient,
+  HttpError,
+  NetworkError,
+  TimeoutError,
+  AumosError,
+  type HttpClient,
+} from "@aumos/sdk-core";
+
 import type {
-  ApiError,
   ApiResult,
   DomainRandomization,
   GapEstimationRequest,
@@ -52,55 +64,51 @@ export interface AgentSimBridgeClientConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Internal adapter
 // ---------------------------------------------------------------------------
 
-async function fetchJson<T>(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
+async function callApi<T>(
+  operation: () => Promise<{ readonly data: T; readonly status: number }>,
 ): Promise<ApiResult<T>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    const body = await response.json() as unknown;
-
-    if (!response.ok) {
-      const errorBody = body as Partial<ApiError>;
+    const response = await operation();
+    return { ok: true, data: response.data };
+  } catch (error: unknown) {
+    if (error instanceof HttpError) {
       return {
         ok: false,
-        error: {
-          error: errorBody.error ?? "Unknown error",
-          detail: errorBody.detail ?? "",
-        },
-        status: response.status,
+        error: { error: error.message, detail: String(error.body ?? "") },
+        status: error.statusCode,
       };
     }
-
-    return { ok: true, data: body as T };
-  } catch (err: unknown) {
-    clearTimeout(timeoutId);
-    const message = err instanceof Error ? err.message : String(err);
+    if (error instanceof TimeoutError) {
+      return {
+        ok: false,
+        error: { error: "Request timed out", detail: error.message },
+        status: 0,
+      };
+    }
+    if (error instanceof NetworkError) {
+      return {
+        ok: false,
+        error: { error: "Network error", detail: error.message },
+        status: 0,
+      };
+    }
+    if (error instanceof AumosError) {
+      return {
+        ok: false,
+        error: { error: error.code, detail: error.message },
+        status: error.statusCode ?? 0,
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      error: { error: "Network error", detail: message },
+      error: { error: "Unexpected error", detail: message },
       status: 0,
     };
   }
-}
-
-function buildHeaders(
-  extraHeaders: Readonly<Record<string, string>> | undefined,
-): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    ...extraHeaders,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,140 +227,101 @@ export interface AgentSimBridgeClient {
 export function createAgentSimBridgeClient(
   config: AgentSimBridgeClientConfig,
 ): AgentSimBridgeClient {
-  const { baseUrl, timeoutMs = 30_000, headers: extraHeaders } = config;
-  const baseHeaders = buildHeaders(extraHeaders);
+  const http: HttpClient = createHttpClient({
+    baseUrl: config.baseUrl,
+    timeout: config.timeoutMs ?? 30_000,
+    defaultHeaders: config.headers,
+  });
 
   return {
-    async createSimulation(
+    createSimulation(
       simConfig: SimulationConfig,
     ): Promise<ApiResult<SimulationEnvironment>> {
-      return fetchJson<SimulationEnvironment>(
-        `${baseUrl}/sim-bridge/simulations`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(simConfig),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<SimulationEnvironment>("/sim-bridge/simulations", simConfig),
       );
     },
 
-    async transferToReality(options: {
+    transferToReality(options: {
       config: TransferConfig;
       sim_values: readonly number[];
     }): Promise<ApiResult<TransferResult>> {
-      return fetchJson<TransferResult>(
-        `${baseUrl}/sim-bridge/transfer/sim-to-real`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(options),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<TransferResult>("/sim-bridge/transfer/sim-to-real", options),
       );
     },
 
-    async estimateGap(
-      request: GapEstimationRequest,
-    ): Promise<ApiResult<GapEstimationResult>> {
-      return fetchJson<GapEstimationResult>(
-        `${baseUrl}/sim-bridge/gap/estimate`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(request),
-        },
-        timeoutMs,
+    estimateGap(request: GapEstimationRequest): Promise<ApiResult<GapEstimationResult>> {
+      return callApi(() =>
+        http.post<GapEstimationResult>("/sim-bridge/gap/estimate", request),
       );
     },
 
-    async getSimResults(options: {
+    getSimResults(options: {
       environment_id: string;
       run_id?: string;
       limit?: number;
     }): Promise<ApiResult<readonly SimResult[]>> {
-      const params = new URLSearchParams();
-      params.set("environment_id", options.environment_id);
-      if (options.run_id !== undefined) {
-        params.set("run_id", options.run_id);
-      }
-      if (options.limit !== undefined) {
-        params.set("limit", String(options.limit));
-      }
-      return fetchJson<readonly SimResult[]>(
-        `${baseUrl}/sim-bridge/simulations/results?${params.toString()}`,
-        { method: "GET", headers: baseHeaders },
-        timeoutMs,
+      const queryParams: Record<string, string> = {
+        environment_id: options.environment_id,
+      };
+      if (options.run_id !== undefined) queryParams["run_id"] = options.run_id;
+      if (options.limit !== undefined) queryParams["limit"] = String(options.limit);
+      return callApi(() =>
+        http.get<readonly SimResult[]>("/sim-bridge/simulations/results", { queryParams }),
       );
     },
 
-    async configureRandomization(
+    configureRandomization(
       request: RandomizationRequest,
     ): Promise<ApiResult<RandomizationResult>> {
-      return fetchJson<RandomizationResult>(
-        `${baseUrl}/sim-bridge/randomization/apply`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(request),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<RandomizationResult>("/sim-bridge/randomization/apply", request),
       );
     },
 
-    async listSimulations(options?: {
+    listSimulations(options?: {
       backend?: string;
       limit?: number;
     }): Promise<ApiResult<readonly SimulationEnvironment[]>> {
-      const params = new URLSearchParams();
-      if (options?.backend !== undefined) {
-        params.set("backend", options.backend);
-      }
-      if (options?.limit !== undefined) {
-        params.set("limit", String(options.limit));
-      }
-      const query = params.toString();
-      return fetchJson<readonly SimulationEnvironment[]>(
-        `${baseUrl}/sim-bridge/simulations${query ? `?${query}` : ""}`,
-        { method: "GET", headers: baseHeaders },
-        timeoutMs,
+      const queryParams: Record<string, string> = {};
+      if (options?.backend !== undefined) queryParams["backend"] = options.backend;
+      if (options?.limit !== undefined) queryParams["limit"] = String(options.limit);
+      return callApi(() =>
+        http.get<readonly SimulationEnvironment[]>("/sim-bridge/simulations", {
+          queryParams,
+        }),
       );
     },
 
-    async getTransferConfig(
-      environmentId: string,
-    ): Promise<ApiResult<TransferConfig>> {
-      return fetchJson<TransferConfig>(
-        `${baseUrl}/sim-bridge/simulations/${encodeURIComponent(environmentId)}/transfer-config`,
-        { method: "GET", headers: baseHeaders },
-        timeoutMs,
+    getTransferConfig(environmentId: string): Promise<ApiResult<TransferConfig>> {
+      return callApi(() =>
+        http.get<TransferConfig>(
+          `/sim-bridge/simulations/${encodeURIComponent(environmentId)}/transfer-config`,
+        ),
       );
     },
 
-    async updateTransferConfig(
+    updateTransferConfig(
       environmentId: string,
       transferConfig: TransferConfig,
     ): Promise<ApiResult<TransferConfig>> {
-      return fetchJson<TransferConfig>(
-        `${baseUrl}/sim-bridge/simulations/${encodeURIComponent(environmentId)}/transfer-config`,
-        {
-          method: "PUT",
-          headers: baseHeaders,
-          body: JSON.stringify(transferConfig),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.put<TransferConfig>(
+          `/sim-bridge/simulations/${encodeURIComponent(environmentId)}/transfer-config`,
+          transferConfig,
+        ),
       );
     },
 
-    async listRandomizations(
+    listRandomizations(
       environmentId: string,
     ): Promise<ApiResult<readonly DomainRandomization[]>> {
-      return fetchJson<readonly DomainRandomization[]>(
-        `${baseUrl}/sim-bridge/simulations/${encodeURIComponent(environmentId)}/randomizations`,
-        { method: "GET", headers: baseHeaders },
-        timeoutMs,
+      return callApi(() =>
+        http.get<readonly DomainRandomization[]>(
+          `/sim-bridge/simulations/${encodeURIComponent(environmentId)}/randomizations`,
+        ),
       );
     },
   };
 }
-

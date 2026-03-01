@@ -32,6 +32,8 @@ backends:
     Stub backends for Gazebo and PyBullet.
 plugins:
     Decorator-based plugin registration via entry-points.
+validation:
+    Sim-to-real validation harness with standard scenarios and fidelity reports.
 """
 from __future__ import annotations
 
@@ -127,6 +129,19 @@ from agent_sim_bridge.metrics import (
 # -- Plugins --------------------------------------------------------------
 from agent_sim_bridge.plugins import PluginRegistry
 
+# -- Validation -----------------------------------------------------------
+from agent_sim_bridge.validation import (
+    Environment as ValidationEnvironment,
+    EnvironmentInput,
+    EnvironmentOutput,
+    FidelityReport,
+    MockEnvironment,
+    ScenarioResult,
+    STANDARD_SCENARIOS,
+    ValidationHarness,
+    ValidationScenario,
+)
+
 __all__: list[str] = [
     "__version__",
     # convenience
@@ -195,4 +210,14 @@ __all__: list[str] = [
     "MetricRecord",
     # plugins
     "PluginRegistry",
+    # validation
+    "ValidationEnvironment",
+    "EnvironmentInput",
+    "EnvironmentOutput",
+    "MockEnvironment",
+    "ValidationScenario",
+    "STANDARD_SCENARIOS",
+    "ScenarioResult",
+    "FidelityReport",
+    "ValidationHarness",
 ]

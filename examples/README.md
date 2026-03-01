@@ -1,19 +1,18 @@
 # Examples
 
-This directory contains runnable examples for agent-sim-bridge.
+| # | Example | Description |
+|---|---------|-------------|
+| 01 | [Quickstart](01_quickstart.py) | Run a sim environment step, record trajectory, check safety |
+| 02 | [Trajectory Recording](02_trajectory_recording.py) | Record and replay simulation episodes |
+| 03 | [Safety Monitoring](03_safety_monitoring.py) | Real-time safety constraint and boundary checking |
+| 04 | [Sim-to-Real Transfer](04_sim_to_real_transfer.py) | Calibrate simulation and apply domain randomization |
+| 05 | [Sensor Fusion](05_sensor_fusion.py) | Noisy sensor readings and multi-sensor fusion |
+| 06 | [Skill Library](06_skill_library.py) | Define, compose, and manage reusable agent skills |
+| 07 | [Validation Harness](07_validation_harness.py) | Run standard scenarios and generate fidelity reports |
 
-| File | Description |
-|------|-------------|
-| [01_quickstart.py](01_quickstart.py) | Basic setup and version check |
-
-## Running an Example
+## Running the examples
 
 ```bash
-pip install -e ".[dev]"
+pip install agent-sim-bridge
 python examples/01_quickstart.py
 ```
-
-## Adding Examples
-
-Name new example files with a numeric prefix so they sort in
-recommended reading order. Update this table accordingly.
